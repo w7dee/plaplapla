@@ -1,166 +1,208 @@
 --[[
  * ***********************************************************************************************************************
  * Copyright (c) 2015 OwlGaming Community - All Rights Reserved
- * All rights reserved. This program and the accompanying materials are private property belongs to OwlGaming Community
- * Unauthorized copying of this file, via any medium is strictly prohibited
- * Proprietary and confidential
  * ***********************************************************************************************************************
- ]]
+ * SECURITY REWRITE - Phase 1
+ * التغييرات:
+ *  1. على السيرفر: مستويات الصلاحية بتتقرا من كاش داخلي (جدول Lua) مش من elementData.
+ *     الكاش بيتملي بس من الكتابات الموثوقة اللي جاية من anticheat -> مستحيل الكلاينت يلوثه.
+ *     fallback على elementData لو العنصر لسه مش في الكاش (توافق كامل مع الكود القديم).
+ *  2. إصلاح باج قديم: `not getElementType(p) == "player"` كانت دايمًا false
+ *     يعني فحص نوع العنصر ما كانش شغال خالص -> كان ممكن تمرير عربية/أوبجكت كـ "لاعب".
+ *  3. أوبتمايزيشن: قراءة من جدول Lua بدل getElementData في أكتر من 20 مكان
+ *     بتتنده آلاف المرات في الدقيقة (نيم تاجز، سكوربورد، شات...).
+ *  4. إضافة getAdminLevel() اللي كانت متصدّرة في meta.xml ومش معرّفة أصلًا.
+ * ***********************************************************************************************************************
+]]
+
+local SERVER = (triggerClientEvent ~= nil)
 
 -- internal affairs
-local internalAffairs = { 
-	
+local internalAffairs = {
 }
 
-function isPlayerHeadAdmin(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
+-- =====================================================================
+-- طبقة قراءة المستويات
+-- =====================================================================
+
+local STAFF_KEYS = {
+	["admin_level"]     = true,
+	["supporter_level"] = true,
+	["vct_level"]       = true,
+	["scripter_level"]  = true,
+	["mapper_level"]    = true,
+	["fmt_level"]       = true,
+	["duty_admin"]      = true,
+	["duty_supporter"]  = true,
+	["hasVctAdmin"]     = true,
+}
+
+local cache = {}   -- [element] = { [key] = value }  (سيرفر فقط)
+
+if SERVER then
+	addEvent("anticheat:onTrustedDataSet", false)
+	addEventHandler("anticheat:onTrustedDataSet", root,
+		function(index, value)
+			if not STAFF_KEYS[index] then return end
+			if not isElement(source) then return end
+			local t = cache[source]
+			if not t then
+				t = {}
+				cache[source] = t
+			end
+			t[index] = value
+		end
+	)
+
+	local function dropCache()
+		cache[source] = nil
 	end
-	local adminLevel = getElementData(player, "admin_level") or 0
-	return (adminLevel >= 5)
+	addEventHandler("onPlayerQuit", root, dropCache)
+	addEventHandler("onElementDestroy", root, dropCache)
+end
+
+-- فحص صحيح لعنصر اللاعب (الإصدار القديم كان مكسور)
+local function isValidPlayer(player)
+	return player ~= nil
+		and isElement(player)
+		and getElementType(player) == "player"
+end
+
+-- القراءة الموحّدة
+local function getLevel(player, key)
+	if not isValidPlayer(player) then return 0 end
+	if SERVER then
+		local t = cache[player]
+		if t and t[key] ~= nil then
+			return tonumber(t[key]) or 0
+		end
+	end
+	return tonumber(getElementData(player, key)) or 0
+end
+
+-- تُستخدم من الأنظمة التانية لو احتاجت تقرا المستوى مباشرة
+function getAdminLevel(player)
+	return getLevel(player, "admin_level")
+end
+
+function getStaffLevel(player, key)
+	if not STAFF_KEYS[key] then return 0 end
+	return getLevel(player, key)
+end
+
+-- =====================================================================
+-- الأدمن
+-- =====================================================================
+
+function isPlayerHeadAdmin(player)
+	return getLevel(player, "admin_level") >= 5
 end
 
 function isPlayerLeadAdmin(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local adminLevel = getElementData(player, "admin_level") or 0
-	return (adminLevel >= 4)
+	return getLevel(player, "admin_level") >= 4
 end
 
 function isPlayerSeniorAdmin(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local adminLevel = getElementData(player, "admin_level") or 0
-	return (adminLevel >= 3) 
+	return getLevel(player, "admin_level") >= 3
 end
 
 function isPlayerAdmin(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local adminLevel = getElementData(player, "admin_level") or 0
-	return (adminLevel >= 2)
+	return getLevel(player, "admin_level") >= 2
 end
 
 function isPlayerTrialAdmin(player, duty_required)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local adminLevel = getElementData(player, "admin_level") or 0
+	local adminLevel = getLevel(player, "admin_level")
+	if adminLevel < 1 then return false end
 	if duty_required then
-		return getElementData(player, 'duty_admin') == 1 and (adminLevel >= 1)
-	else
-		return (adminLevel >= 1)
+		return getLevel(player, "duty_admin") == 1
 	end
+	return true
 end
 
+-- =====================================================================
+-- السبورت
+-- =====================================================================
+
 function isPlayerSupporter(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local supporter_level = getElementData(player, "supporter_level") or 0
-	return (supporter_level >= 1)
+	return getLevel(player, "supporter_level") >= 1
 end
 
 function isPlayerSupportManager(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local supporter_level = getElementData(player, "supporter_level") or 0
-	return (supporter_level >= 2)
+	return getLevel(player, "supporter_level") >= 2
 end
 
+-- =====================================================================
+-- السكريبترز
+-- =====================================================================
+
 function isPlayerTester(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local scripter_level = getElementData(player, "scripter_level") or 0
-	return (scripter_level >= 1)
+	return getLevel(player, "scripter_level") >= 1
 end
 
 function isPlayerScripter(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local scripter_level = getElementData(player, "scripter_level") or 0
-	return (scripter_level >= 2)
+	return getLevel(player, "scripter_level") >= 2
 end
 
 function isPlayerLeadScripter(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local scripter_level = getElementData(player, "scripter_level") or 0
-	return (scripter_level >= 3)
+	return getLevel(player, "scripter_level") >= 3
 end
 
---LEADER
+function getScripterLevel(player)
+	return getLevel(player, "scripter_level")
+end
+
+-- =====================================================================
+-- VCT
+-- =====================================================================
+
 function isPlayerVehicleConsultant(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	if getElementData(player, "hasVctAdmin") then
+	if not isValidPlayer(player) then return false end
+	if getLevel(player, "hasVctAdmin") > 0 then
 		return true
 	end
-	local vct_level = getElementData(player, "vct_level") or 0
-	return (vct_level >= 2)
+	return getLevel(player, "vct_level") >= 2
 end
 
---MEMBERS
 function isPlayerVCTMember(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local vct_level = getElementData(player, "vct_level") or 0
-	return (vct_level >= 1)
+	return getLevel(player, "vct_level") >= 1
 end
 
---LEADER
+-- =====================================================================
+-- Mapping Team
+-- =====================================================================
+
 function isPlayerMappingTeamLeader(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local mapper_level = getElementData(player, "mapper_level") or 0
-	return (mapper_level >= 2)
+	return getLevel(player, "mapper_level") >= 2
 end
 
---MEMBERS
 function isPlayerMappingTeamMember(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local mapper_level = getElementData(player, "mapper_level") or 0
-	return (mapper_level >= 1)
+	return getLevel(player, "mapper_level") >= 1
 end
+
+-- =====================================================================
+-- FMT
+-- =====================================================================
 
 function isPlayerFMTMember(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local fmt_level = getElementData(player, "fmt_level") or 0
-	return (fmt_level >= 1)
+	return getLevel(player, "fmt_level") >= 1
 end
 
 function isPlayerFMTLeader(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	local fmt_level = getElementData(player, "fmt_level") or 0
-	return (fmt_level >= 2)
+	return getLevel(player, "fmt_level") >= 2
 end
 
+-- =====================================================================
+-- عام
+-- =====================================================================
+
 function isPlayerStaff(player)
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	return 	isPlayerTrialAdmin(player)
-	or		isPlayerSupporter(player)
-	or 		isPlayerScripter(player)
-	or 		isPlayerVCTMember(player)
-	or 		isPlayerMappingTeamMember(player)
-	or      isPlayerFMTMember(player)
+	if not isValidPlayer(player) then return false end
+	return isPlayerTrialAdmin(player)
+		or isPlayerSupporter(player)
+		or isPlayerScripter(player)
+		or isPlayerVCTMember(player)
+		or isPlayerMappingTeamMember(player)
+		or isPlayerFMTMember(player)
 end
 
 function getAdminGroups() -- this is used in c_adminstats to correspond levels to forum usergroups
@@ -168,14 +210,8 @@ function getAdminGroups() -- this is used in c_adminstats to correspond levels t
 end
 
 -- internal affairs
-function isPlayerIA( player )
+function isPlayerIA(player)
 	return false
-	--[[
-	if not player or not isElement(player) or not getElementType(player) == "player" then
-		return false
-	end
-	return internalAffairs[ tonumber( getElementData( player, "account:id" ) ) ] or false
-	]]
 end
 
 adminTitles = {
