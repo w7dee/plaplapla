@@ -2,6 +2,48 @@ mysql = exports.mysql
 integration = exports.integration
 
 -- EVENTS
+
+-- =====================================================================
+-- [SECURITY PATCH] حارس صلاحيات الفاكشن
+-- الأحداث تحت كانت مفتوحة لأي لاعب، أخطرها تغيير رُتَب الأعضاء
+-- (أي حد كان يقدر يرقّي نفسه لقائد أي فاكشن).
+-- بنستخدم نفس نظام صلاحيات الفاكشن الموجود أصلًا (hasMemberPermissionTo)
+-- عشان السلوك الشرعي ما يتغيرش.
+-- =====================================================================
+local function factionGuard( eventName, factionID, action, cooldown )
+	if not client then return nil end
+	if getElementData( client, "loggedin" ) ~= 1 then return nil end
+
+	local fid = exports.global:secureInt( factionID, 1 )
+	if not fid then return nil end
+
+	if cooldown and not exports.global:validateSecureCall( client, client, eventName, "none", cooldown ) then
+		return nil
+	end
+
+	-- الأدمن الأعلى له صلاحية دايمًا (زي السلوك القديم في اللوحة الإدارية)
+	if exports.integration:isPlayerLeadAdmin( client ) then
+		return fid
+	end
+
+	if action and not hasMemberPermissionTo( client, fid, action ) then
+		exports.global:logSecurityViolation( client, eventName, "FACTION_PERMISSION_DENIED" )
+		outputChatBox( "Not allowed, sorry.", client )
+		return nil
+	end
+
+	-- حتى من غير action معيّن: لازم يكون عضو في الفاكشن دي
+	if not action then
+		local isMember = isPlayerInFaction( client, fid )
+		if not isMember then
+			exports.global:logSecurityViolation( client, eventName, "NOT_FACTION_MEMBER" )
+			return nil
+		end
+	end
+
+	return fid
+end
+
 addEvent("onPlayerJoinFaction", false)
 addEventHandler("onPlayerJoinFaction", getRootElement(),
 	function(theTeam)
@@ -917,6 +959,8 @@ addEventHandler("factionmenu:getFinance", getResourceRootElement(), getFactionFi
 addEvent('factionmenu:setphone', true)
 addEventHandler('factionmenu:setphone', root,
 	function(playerName, number, factionID)
+		factionID = factionGuard( "factionmenu:setphone", factionID, "modify_ranks", 500 )
+		if not factionID then return end
 		local theTeam = getFactionFromID(factionID)
 
 		local _, factionInfo, thePlayer = getPlayerFactions(playerName)
@@ -991,6 +1035,7 @@ end
 
 addEvent("fetchDutyInfo", true)
 addEventHandler("fetchDutyInfo", resourceRoot, function(factionID)
+	factionID = factionGuard( "fetchDutyInfo", factionID, nil, 500 )
 	if not factionID then return end
 
 	local elementInfo = getElementData(resourceRoot, "DutyGUI")
@@ -1002,6 +1047,7 @@ end)
 
 addEvent("Duty:Grab", true)
 addEventHandler("Duty:Grab", resourceRoot, function(factionID)
+	factionID = factionGuard( "Duty:Grab", factionID, nil, 500 )
 	if not factionID then return end
 
 	local t = getAllowList(factionID)
@@ -1011,7 +1057,8 @@ end)
 
 addEvent("Duty:GetPackages", true)
 addEventHandler("Duty:GetPackages", resourceRoot, function(factionID)
-	factionID = tonumber(factionID)
+	factionID = factionGuard( "Duty:GetPackages", factionID, nil, 500 )
+	if not factionID then return end
 
 	triggerClientEvent(client, "Duty:GotPackages", resourceRoot, custom[factionID])
 end)
@@ -1044,6 +1091,11 @@ end
 addEventHandler("onPlayerQuit", getRootElement(), disconnectThem)
 
 function addDuty(dutyItems, finalLocations, dutyNewSkins, name, factionID, dutyID)
+	-- [SECURITY] كان أي لاعب يضيف/يعدّل دوام أي فاكشن
+	if client then
+		factionID = factionGuard( "Duty:AddDuty", factionID, "modify_duty_settings", 500 )
+		if not factionID then return end
+	end
 	local dutyItems = dutyItems or {}
 	local finalLocations = finalLocations or {}
 	local dutyNewSkins = dutyNewSkins or {}
@@ -1076,6 +1128,14 @@ addEvent("Duty:AddDuty", true)
 addEventHandler("Duty:AddDuty", resourceRoot, addDuty)
 
 function addLocation(x, y, z, r, i, d, name, factionID, index)
+	if client then
+		factionID = factionGuard( "Duty:AddLocation", factionID, "modify_duty_settings", 500 )
+		if not factionID then return end
+		x = exports.global:secureNumber( x, -6000, 6000 )
+		y = exports.global:secureNumber( y, -6000, 6000 )
+		z = exports.global:secureNumber( z, -1000, 2000 )
+		if not ( x and y and z ) then return end
+	end
 	local interiorElement = exports.pool:getElement("interior", d) or d == 0
 	if interiorElement then
 		local interiorF = 0
@@ -1118,6 +1178,12 @@ addEvent("Duty:AddLocation", true)
 addEventHandler("Duty:AddLocation", resourceRoot, addLocation)
 
 function addVehicle(vehicleID, factionID)
+	if client then
+		factionID = factionGuard( "Duty:AddVehicle", factionID, "modify_duty_settings", 500 )
+		if not factionID then return end
+		vehicleID = exports.global:secureInt( vehicleID, 1 )
+		if not vehicleID then return end
+	end
 	local element = exports.pool:getElement("vehicle", vehicleID)
 	if element then
 		if getElementData(element, "faction") == factionID then
@@ -1219,7 +1285,8 @@ end
 
 addEvent("faction-system.showChangeRankGUI", true)
 addEventHandler("faction-system.showChangeRankGUI", root, function(playerName, factionID)
-	local factionID = tonumber(factionID)
+	factionID = factionGuard( "faction-system.showChangeRankGUI", factionID, "change_member_rank", 500 )
+	if not factionID then return end
 
 	local ranks = {}	-- Ranks Table
 	local def_table		-- Default Rank Table
@@ -1239,7 +1306,10 @@ end)
 addEvent("faction-system.saveNewRank", true)
 addEventHandler("faction-system.saveNewRank", root, 
 	function(playerName, oldRank, newRank, factionID)
-		local fID = tonumber(factionID)
+		local fID = factionGuard( "faction-system.saveNewRank", factionID, "change_member_rank", 500 )
+		if not fID then return end
+		playerName = exports.global:secureString( playerName, 64 )
+		if not playerName then return end
 		local plrRank = getPlayerFactionRank(client)
 		local oldRank = getFactionRankIDByName(fID, oldRank)
 		local newRank = getFactionRankIDByName(fID, newRank)
