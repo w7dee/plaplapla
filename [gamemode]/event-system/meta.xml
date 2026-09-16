@@ -41,10 +41,10 @@
 	<file src="easter/egg.dff" />
 	-->
 	
-   	<!-- BMX event at verona pier 
-   	<script src="bmxpier/server.lua" type="server" />
-   	<script src="bmxpier/client.lua" type="client" />
-   	<!--<map src="bmxpier/bmx.map" dimension="1"></map>
-   	<file src="bmxpier/banner.jpg" />
-    <file src="bmxpier/DUPONT.jpg" /> -->
+	<!-- BMX event at verona pier (disabled)
+	     script src="bmxpierserver.lua" type="server" 
+	     script src="bmxpierclient.lua" type="client" 
+	     map src="bmxpierbmx.map" dimension="1"map
+	     file src="bmxpierbanner.jpg" 
+	     file src="bmxpierDUPONT.jpg"   -->
 </meta>
