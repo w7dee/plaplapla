@@ -10,6 +10,15 @@
 <meta>
 	<info author="OWL MTA Scripting Team" type="script" description="Global Functions" />
 	
+	<script src="s_security.lua" type="server" />
+	<export function="validateSecureCall" type="server" />
+	<export function="logSecurityViolation" type="server" />
+	<export function="secureNumber" type="server" />
+	<export function="secureInt" type="server" />
+	<export function="secureString" type="server" />
+	<export function="secureElement" type="server" />
+	<export function="secureNearbyPlayer" type="server" />
+
 	<script src="g_chat_globals.lua" type="shared" />
 	<script src="s_chat_globals.lua" type="server" />
 	<script src="c_fov.lua" type="client" />
