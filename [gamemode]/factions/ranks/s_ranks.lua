@@ -28,14 +28,45 @@ function getRankInfo(factionID, player)
 	end
 	triggerClientEvent(client, "faction-system.setRankInfo", resourceRoot, ranks, rank_perms, permissions, wages)
 end
+
+-- =====================================================================
+-- [SECURITY PATCH] كل أحداث إدارة الرُتَب كانت مفتوحة لأي لاعب:
+-- إضافة/حذف/إعادة تسمية رُتَب أي فاكشن + تعديل الصلاحيات والرواتب.
+-- دلوقتي لازم صلاحية "modify_ranks" جوه نفس الفاكشن (أو ليد أدمن).
+-- =====================================================================
+local function rankGuard( eventName, factionID, cooldown )
+	if not client then return nil end
+	if getElementData( client, "loggedin" ) ~= 1 then return nil end
+	local fid = exports.global:secureInt( factionID, 1 )
+	if not fid then return nil end
+	if cooldown and not exports.global:validateSecureCall( client, client, eventName, "none", cooldown ) then
+		return nil
+	end
+	if exports.integration:isPlayerLeadAdmin( client ) then return fid end
+	if not exports.factions:hasMemberPermissionTo( client, fid, "modify_ranks" ) then
+		exports.global:logSecurityViolation( client, eventName, "FACTION_PERMISSION_DENIED" )
+		outputChatBox( "Not allowed, sorry.", client )
+		return nil
+	end
+	return fid
+end
+
 addEvent("faction-system.getRankInfo", true)
-addEventHandler("faction-system.getRankInfo", root, getRankInfo)
+addEventHandler("faction-system.getRankInfo", root, function(...)
+	if not client then return end
+	if getElementData( client, "loggedin" ) ~= 1 then return end
+	return getRankInfo(...)
+end)
 
 -- Add Faction Rank
 ------------------>>
 
 addEvent("faction-system.addFactionRank", true)
 addEventHandler("faction-system.addFactionRank", root, function(rank, perms, factionID)
+	factionID = rankGuard( "faction-system.addFactionRank", factionID, 500 )
+	if not factionID then return end
+	rank = exports.global:secureString( rank, 64 )
+	if not rank then return end
 	local fID = tonumber(factionID)
 		-- Check for Same Rank Name
 	for i,rankID in ipairs(getFactionRanks(fID)) do
@@ -269,6 +300,11 @@ end)
 
 addEvent("faction-system.setFactionRankName", true)
 addEventHandler("faction-system.setFactionRankName", root, function(rankID, rankName, factionID)
+	factionID = rankGuard( "faction-system.setFactionRankName", factionID, 500 )
+	if not factionID then return end
+	rankID = exports.global:secureInt( rankID, 0 )
+	rankName = exports.global:secureString( rankName, 64 )
+	if not rankID or not rankName then return end
 	if not hasMemberPermissionTo(client, factionID, "modify_ranks") then
 		return false
 	end
@@ -304,6 +340,10 @@ end)
 
 addEvent("faction-system.removeFactionRank", true)
 addEventHandler("faction-system.removeFactionRank", root, function(rankID, factionID)
+	factionID = rankGuard( "faction-system.removeFactionRank", factionID, 500 )
+	if not factionID then return end
+	rankID = exports.global:secureInt( rankID, 0 )
+	if not rankID then return end
 	-- Security check.
 	if not hasMemberPermissionTo(client, factionID, "modify_ranks") then
 		return false
@@ -359,6 +399,11 @@ end
 
 addEvent("faction-system.updateRankPermissions", true)
 addEventHandler("faction-system.updateRankPermissions", root, function(rankID, permissions, wage, factionID)
+	factionID = rankGuard( "faction-system.updateRankPermissions", factionID, 500 )
+	if not factionID then return end
+	rankID = exports.global:secureInt( rankID, 0 )
+	wage = exports.global:secureInt( wage, 0, 1000000 )
+	if not rankID or not wage then return end
 	if not hasMemberPermissionTo(client, factionID, "modify_ranks") then
 		return false
 	end
@@ -376,6 +421,9 @@ end)
 
 addEvent("faction-system.updateRankOrder", true)
 addEventHandler("faction-system.updateRankOrder", root, function(rankIDs, factionID)
+	factionID = rankGuard( "faction-system.updateRankOrder", factionID, 500 )
+	if not factionID then return end
+	if type( rankIDs ) ~= "table" then return end
 	if not hasMemberPermissionTo(client, factionID, "modify_ranks") then
 		return false
 	end
