@@ -455,6 +455,10 @@ function withdrawATMMoneyPersonal(amount, theATM)
     if state == 0 then
         return false
     end
+    if not validAmount( amount ) then return false end
+    if not validATM( client, theATM ) then
+        return false
+    end
 
     -- Fetch the ATM card from the ATM machine
     local foundAnATMCard = getATMCardFromATMMachine(theATM)
@@ -548,11 +552,48 @@ end
 addEvent("bank:withdrawATMMoneyPersonal", true)
 addEventHandler("bank:withdrawATMMoneyPersonal", getRootElement(), withdrawATMMoneyPersonal)
 
+
+-- =====================================================================
+-- [SECURITY PATCH] مساعدات التحقق للـ ATM
+-- المشاكل اللي اتقفلت:
+--   * المبالغ كانت بتتقبل سالبة/كسرية/ضخمة في الإيداع والتحويل
+--   * `theATM` كان أي عنصر بيبعته الكلاينت، من غير تأكيد إنه ATM حقيقي
+--     ولا إن اللاعب واقف جنبه أصلًا (كان ممكن استخدام ATM من آخر الخريطة)
+--   * `targetBankAccNo` و `reason` كانوا نصوص بلا حد أقصى
+-- =====================================================================
+local ATM_MAX_DISTANCE = 6
+
+local function validAmount( amount )
+	if type( amount ) ~= "number" then return nil end
+	if amount ~= amount then return nil end            -- NaN
+	if amount <= 0 or amount > 1000000000 then return nil end
+	if math.ceil( amount ) ~= amount then return nil end
+	return amount
+end
+
+local function validATM( thePlayer, theATM )
+	if not isElement( theATM ) then return nil end
+	if getElementDimension( thePlayer ) ~= getElementDimension( theATM ) then return nil end
+	if getElementInterior( thePlayer ) ~= getElementInterior( theATM ) then return nil end
+	local px, py, pz = getElementPosition( thePlayer )
+	local ax, ay, az = getElementPosition( theATM )
+	local dx, dy, dz = px - ax, py - ay, pz - az
+	if ( dx * dx + dy * dy + dz * dz ) > ( ATM_MAX_DISTANCE * ATM_MAX_DISTANCE ) then
+		exports.global:logSecurityViolation( thePlayer, "bank:atm", "ATM_TOO_FAR" )
+		return nil
+	end
+	return theATM
+end
+
 function depositATMMoneyPersonal(amount, theATM)
 	local state = tonumber(getElementData(client, "loggedin")) or 0
 	if (state == 0) then
 		return false
 	end
+
+	amount = validAmount( amount )
+	if not amount then return false end
+	if not validATM( client, theATM ) then return false end
 
 	local foundAnATMCard = getATMCardFromATMMachine(theATM)
 	if not foundAnATMCard then
@@ -659,8 +700,17 @@ function transferATMMoneyToPersonal(theATM, amount,targetBankAccNo, reason)
 		return false
 	end
 
-	if not reason then
+	amount = validAmount( amount )
+	if not amount then return false end
+	if not validATM( client, theATM ) then return false end
+
+	targetBankAccNo = exports.global:secureString( targetBankAccNo, 64 )
+	if not targetBankAccNo then return false end
+
+	if reason == nil then
 		reason = ""
+	else
+		reason = exports.global:secureString( reason, 128 ) or ""
 	end
 
 	local foundAnATMCard = getATMCardFromATMMachine(theATM)
