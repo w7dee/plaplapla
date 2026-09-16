@@ -7,8 +7,50 @@
 * ***********************************************************************************************************************
 ]]
 
+
+-- =====================================================================
+-- [SECURITY PATCH]
+-- الـ 4 أحداث في الملف ده كانوا مفتوحين تمامًا لأي لاعب:
+--   factions:delete      -> حذف أي فاكشن من الداتابيز (أخطرهم)
+--   factions:editFaction -> تعديل أي فاكشن
+--   factions:fetchFactionList / listMember -> قراءة بيانات كل الفاكشنز والأعضاء
+-- الصلاحيات هنا مطابقة للي الكلاينت بيستخدمه لإظهار الواجهة
+-- (faction_manager_c.lua سطر 17 و 153) عشان مفيش حاجة تتكسر.
+-- =====================================================================
+
+local function canViewFactions( p )
+	return exports.integration:isPlayerTrialAdmin( p )
+		or exports.integration:isPlayerSupporter( p )
+		or exports.integration:isPlayerScripter( p )
+		or exports.integration:isPlayerFMTMember( p )
+end
+
+local function canEditFactions( p )
+	return exports.integration:isPlayerLeadAdmin( p )
+		or exports.integration:isPlayerFMTLeader( p )
+end
+
+-- بترجع اللاعب الحقيقي أو nil
+local function guard( eventName, permFn, cooldown )
+	if not client then return nil end
+	if source ~= resourceRoot and source ~= client then
+		exports.global:logSecurityViolation( client, eventName, "SOURCE_SPOOF" )
+		return nil
+	end
+	if getElementData( client, "loggedin" ) ~= 1 then return nil end
+	if not exports.global:validateSecureCall( client, client, eventName, "none", cooldown ) then
+		return nil
+	end
+	if not permFn( client ) then
+		exports.global:logSecurityViolation( client, eventName, "PERMISSION_DENIED" )
+		return nil
+	end
+	return client
+end
+
 addEvent( 'factions:fetchFactionList', true )
 addEventHandler( 'factions:fetchFactionList', resourceRoot, function ( )
+	if not guard( 'factions:fetchFactionList', canViewFactions, 1000 ) then return end
 	dbQuery( function( qh, client )
 		local res, nums, id = dbPoll( qh, 0 )
 		local factions = { }
@@ -37,6 +79,14 @@ end )
 
 addEvent( 'factions:editFaction', true )
 addEventHandler( 'factions:editFaction', resourceRoot, function( data, old_id )
+	if not guard( 'factions:editFaction', canEditFactions, 500 ) then return end
+	if type( data ) ~= 'table' then return end
+	data.name = exports.global:secureString( data.name, 64 )
+	if not data.name then return end
+	if old_id ~= nil then
+		old_id = exports.global:secureInt( old_id, 1 )
+		if not old_id then return end
+	end
 	local qh = dbQuery( exports.mysql:getConn(), "SELECT id, name FROM factions WHERE id!=? AND name=? LIMIT 1", old_id or 0, data.name )
 	local res, nums, id = dbPoll( qh, 10000 )
 	if res then
@@ -152,7 +202,9 @@ end )
 
 addEvent( 'factions:delete', true )
 addEventHandler( 'factions:delete', resourceRoot, function( factionID )
-	factionID = tonumber( factionID )
+	if not guard( 'factions:delete', canEditFactions, 1000 ) then return end
+	factionID = exports.global:secureInt( factionID, 1 )
+	if not factionID then return end
 	dbExec(exports.mysql:getConn(), "DELETE FROM factions WHERE id=?", factionID )
 	dbExec(exports.mysql:getConn(), "DELETE FROM faction_ranks WHERE faction_id=?", factionID )
 	--Clean all players in the faction
@@ -248,6 +300,9 @@ end)
 
 addEvent( 'factions:listMember', true )
 addEventHandler( 'factions:listMember', resourceRoot, function ( fact_id )
+	if not guard( 'factions:listMember', canViewFactions, 500 ) then return end
+	fact_id = exports.global:secureInt( fact_id, 1 )
+	if not fact_id then return end
 	dbQuery( function( qh, client, fact_id )
 		fact_id = tonumber(fact_id)
 		local res, nums, id = dbPoll( qh, 0 )
