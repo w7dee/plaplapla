@@ -81,6 +81,11 @@ function depositMoneyPersonal(amount)
 	if (state == 0) then
 		return
 	end
+	-- [SECURITY] مبلغ سالب أو كسري كان بيعدّي من غير أي فحص
+	if type(amount) ~= "number" or amount <= 0 or math.ceil(amount) ~= amount or amount > 1000000000 then
+		outputChatBox("Invalid amount.", client, 255, 0, 0)
+		return
+	end
 	if exports.global:takeMoney(client, amount, nil, true) then
 			local money = getElementData(client, "bankmoney")
 			setElementDataEx(client, "bankmoney", money+amount, true)
@@ -100,7 +105,22 @@ function withdrawMoneyBusiness(amount, factionID)
 	if (state == 0) then
 		return
 	end
-	
+
+	-- [SECURITY] كان أي لاعب يقدر يسحب فلوس أي فاكشن في السيرفر.
+	factionID = exports.global:secureInt(factionID, 1)
+	if not factionID then return end
+	if not exports.factions:hasMemberPermissionTo(client, factionID, "manage_finance") then
+		exports.global:logSecurityViolation(client, "withdrawMoneyBusiness", "FACTION_PERMISSION_DENIED")
+		outputChatBox("You do not have access to that account.", client, 255, 0, 0)
+		return
+	end
+
+	-- نفس التحقق اللي في السحب الشخصي (كان ناقص هنا)
+	if type(amount) ~= "number" or amount <= 0 or math.ceil(amount) ~= amount or amount > 1000000000 then
+		outputChatBox("Invalid amount.", client, 255, 0, 0)
+		return
+	end
+
 	local theTeam = exports.factions:getFactionFromID(factionID)
 	if exports.global:takeMoney(theTeam, amount) then
 		if exports.global:giveMoney(client, amount) then
@@ -247,9 +267,15 @@ addEventHandler("transferMoneyToPersonal", getRootElement(), transferMoneyToPers
 ]]
 
 function tellTransfersPersonal(cardInfo)
+	-- [SECURITY] cardInfo كان بيتاخد من الكلاينت كـ dbid مباشرة
+	-- يعني أي لاعب يقرا كشف حساب أي شخصية في السيرفر.
 	local dbid = getElementData(client, "dbid")
-	if cardInfo then
-		dbid = cardInfo
+	if cardInfo ~= nil then
+		local requested = exports.global:secureInt(cardInfo, 1)
+		if requested and requested ~= tonumber(dbid) then
+			exports.global:logSecurityViolation(client, "tellTransfersPersonal", "FOREIGN_ACCOUNT_READ")
+			return
+		end
 	end
 	tellTransfers(client, dbid, "recievePersonalTransfer")
 end
@@ -349,6 +375,10 @@ function addBankTransactionLog(fromAccount, toAccount, amount, type, reason, det
 		return false
 	end
 
+	-- [SECURITY] تحويل صريح لأرقام قبل الـ concat (كان SQL injection)
+	amount = math.floor(tonumber(amount))
+	type = math.floor(tonumber(type))
+
 	local sql = "INSERT INTO wiretransfers SET `amount` = '"..amount.."', type = '"..type.."' "
 	if fromAccount then
 		sql = sql..", `from` = '"..exports.global:toSQL(fromAccount).."' "
@@ -371,8 +401,10 @@ function addBankTransactionLog(fromAccount, toAccount, amount, type, reason, det
 
 	return mysql:query_free(sql) 
 end
-addEvent("addBankTransactionLog", true)
-addEventHandler("addBankTransactionLog", getRootElement(), addBankTransactionLog)
+-- [SECURITY] الحدث ده كان مفتوح لأي لاعب، والدالة بتحط `amount` و `type`
+-- في الاستعلام بالـ concat المباشر -> SQL injection + تزوير سجل التحويلات.
+-- التسجيل ده عملية داخلية بحتة، فشيلنا تعريضه للكلاينت خالص.
+addEvent("addBankTransactionLog", false)
 
 
 --MAXIME
