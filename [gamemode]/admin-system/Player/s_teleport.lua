@@ -1,3 +1,20 @@
+--[[
+ * [SECURITY PATCH]
+ * كل الدوال هنا كانت بتاخد `thePlayer` كباراميتر أول من الكلاينت،
+ * وفحص الصلاحية كان بيتعمل على العنصر ده -> كان ممكن تمرير عنصر أدمن
+ * وتعدي الفحص. دلوقتي الأحداث بتنده بـ client مباشرة.
+]]
+
+local function secureCmdEvent(eventName, handler, perm, cooldown)
+	addEvent(eventName, true)
+	addEventHandler(eventName, root, function(...)
+		if not client then return end
+		local thePlayer = exports.global:validateSecureCall(client, source, eventName, perm, cooldown)
+		if not thePlayer then return end
+		return handler(thePlayer, ...)
+	end)
+end
+
 local locs = {}
 
 function canViewTPS(thePlayer)
@@ -50,8 +67,7 @@ function openLocationManager(thePlayer)
         return nil
     end
 end
-addEvent("server:openLocationManager", true)
-addEventHandler("server:openLocationManager", root, openLocationManager)
+secureCmdEvent("server:openLocationManager", openLocationManager, "none", 500)
 addCommandHandler("tps", openLocationManager)
 
 function addNewLocation(thePlayer, newValue, newDesc)
@@ -90,12 +106,14 @@ function addNewLocation(thePlayer, newValue, newDesc)
         end
     end
 end
-addEvent("addNewLocation", true)
-addEventHandler("addNewLocation", root, addNewLocation)
+secureCmdEvent("addNewLocation", addNewLocation, "none", 500)
 
 function deleteLocation(thePlayer, id)
     if canManageTPS(thePlayer) then
-        if not id and not tonumber(id) then
+        -- [SECURITY] كان `if not id and not tonumber(id)` وده منطق غلط
+        -- (بيعدّي أي نص طالما مش nil) -> SQL injection في الاستعلامين تحت
+        id = exports.global:secureInt(id, 1)
+        if not id then
             return nil
         end
 
@@ -114,8 +132,7 @@ function deleteLocation(thePlayer, id)
         end
     end
 end
-addEvent("deleteLocation", true)
-addEventHandler("deleteLocation", root, deleteLocation)
+secureCmdEvent("deleteLocation", deleteLocation, "none", 500)
 
 -- Teleport to location
 
@@ -522,8 +539,16 @@ local teleportLocations = {
 addEvent( "gotoMark", true )
 addEventHandler( "gotoMark", getRootElement( ),
 	function( x, y, z, interior, dimension, name )
+		if not client or source ~= client then return end
+		-- [SECURITY] حدود الخريطة: منع إحداثيات مجنونة بتعلّق السيرفر/الكلاينتس
+		x = exports.global:secureNumber( x, -6000, 6000 )
+		y = exports.global:secureNumber( y, -6000, 6000 )
+		z = exports.global:secureNumber( z, -1000, 2000 )
+		interior  = exports.global:secureInt( interior, 0, 255 )
+		dimension = exports.global:secureInt( dimension, 0, 65535 )
+		if not ( x and y and z and interior and dimension ) then return end
 		if type( x ) == "number" and type( y ) == "number" and type( z ) == "number" and type( interior ) == "number" and type( dimension ) == "number" then
-			if getElementData ( client, "loggedin" ) == 1 and ( exports.integration:isPlayerTrialAdmin(client) or exports.integration:isPlayerSupporter(client) or exports.integration:isPlayerVehicleConsultant( client ) or exports.integration:isPlayerMappingTeamMember( clientclient ) or exports.integration:isPlayerScripter(client)) then
+			if getElementData ( client, "loggedin" ) == 1 and ( exports.integration:isPlayerTrialAdmin(client) or exports.integration:isPlayerSupporter(client) or exports.integration:isPlayerVehicleConsultant( client ) or exports.integration:isPlayerMappingTeamMember( client ) or exports.integration:isPlayerScripter(client)) then
 				local vehicle = nil
 				local seat = nil
 
