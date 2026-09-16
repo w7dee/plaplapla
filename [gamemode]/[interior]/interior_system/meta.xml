@@ -57,7 +57,7 @@
     <file src="icon.png" />
     
     <export function="unownProperty" type="server" />
-    <!-- unownProperty(intid) --This function is meant to be used by the system or to be triggered from UCP remotely. Works similarly to the publicSellProperty however, it's simplier. / MAXIME / 2015.1.11-->
+    <!-- unownProperty(intid)  : This function is meant to be used by the system or to be triggered from UCP remotely. Works similarly to the publicSellProperty however, it's simplier. / MAXIME / 2015.1.11 -->
     
     <script src="safe_s.lua" type="server" />
     <export function="clearSafe" type="server" />
