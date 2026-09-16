@@ -8,9 +8,36 @@
 ]]
 
 local mysql = exports.mysql
+
+-- =====================================================================
+-- [SECURITY] غلاف آمن لكل الـ remote events في الملف ده
+-- بيتأكد إن: اللاعب حقيقي + الـ source مش مزوّر + عنده الصلاحية + مش بيسبم
+-- =====================================================================
+local function secure(eventName, handler, perm, cooldown)
+	addEvent(eventName, true)
+	addEventHandler(eventName, root, function(...)
+		if not client then return end
+		local thePlayer = exports.global:validateSecureCall(client, source, eventName, perm, cooldown)
+		if not thePlayer then return end
+		return handler(thePlayer, ...)
+	end)
+end
+
+-- من له حق فتح/تعديل إدارة الطاقم
+local function canManageStaff(p)
+	return exports.integration:isPlayerSeniorAdmin(p)
+		or exports.integration:isPlayerLeadScripter(p)
+end
+
 local staffTitles = exports.integration:getStaffTitles()
-function getStaffInfo(username, error)
-	local thePlayer = source
+function getStaffInfo(thePlayer, username, error)
+	-- [SECURITY] كان بياخد source (قابل للتزوير) ومن غير أي فحص صلاحية
+	if not canManageStaff(thePlayer) then
+		exports.global:logSecurityViolation(thePlayer, "staff:getStaffInfo", "PERMISSION_DENIED")
+		return false
+	end
+	username = exports.global:secureString(username, 64)
+	if not username then return false end
 	local error1 = error
 	dbQuery(function(qh, username, error, source)
 		local result = dbPoll(qh, 0)
@@ -34,11 +61,13 @@ function getStaffInfo(username, error)
 		end
 	end, {username, error, source}, exports.mysql:getConn(), "SELECT id, username, admin, supporter, vct, scripter, mapper, fmt FROM accounts WHERE username=?", username)
 end
-addEvent("staff:getStaffInfo", true)
-addEventHandler("staff:getStaffInfo", root, getStaffInfo)
+secure("staff:getStaffInfo", getStaffInfo, "none", 500)
 
-function getTeamsData()
-	local thePlayer = source
+function getTeamsData(thePlayer)
+	if not canManageStaff(thePlayer) then
+		exports.global:logSecurityViolation(thePlayer, "staff:getTeamsData", "PERMISSION_DENIED")
+		return false
+	end
 	staffTitles = exports.integration:getStaffTitles()
 	local users = {}
 	dbQuery(
@@ -48,12 +77,9 @@ function getTeamsData()
 				for _, row in pairs(result) do
 					for i, k in ipairs(staffTitles) do
 						if not users[i] then users[i] = {} end
-						-- fetch report count
-						local reportsQuery = dbQuery(exports.mysql:getConn(), "SELECT adminreports FROM account_details WHERE account_id = ?", row.id)
-						local reportsResult = dbPoll(reportsQuery, -1)
-						row.adminreports = (reportsResult[1] and reportsResult[1].adminreports) or 0
-						dbFree(reportsQuery)
-						--
+						-- [OPTIMIZATION] عدد الريبورتات بقى جاي مع نفس الاستعلام (LEFT JOIN)
+						-- بدل استعلام حاجب (dbPoll -1) لكل صف × 6 فرق = كان بيعلّق السيرفر
+						row.adminreports = tonumber(row.adminreports) or 0
 						if tonumber(row.admin) > 0 and i == 1 then
 							if not row.rank then row.rank = {} end
 							row.rank[i] = tonumber(row.admin)
@@ -91,12 +117,15 @@ function getTeamsData()
 				dbFree(qh)
 			end
 		end
-	, {staffTitles, users}, exports.mysql:getConn(), "SELECT id, username, admin, supporter, vct, scripter, mapper, fmt FROM accounts  WHERE admin > 0 OR supporter > 0 OR vct > 0 OR scripter>0 OR mapper>0 OR fmt>0 GROUP BY id ORDER BY admin DESC, supporter DESC, vct DESC, scripter DESC, mapper DESC")
+	, {staffTitles, users}, exports.mysql:getConn(), "SELECT a.id, a.username, a.admin, a.supporter, a.vct, a.scripter, a.mapper, a.fmt, COALESCE(d.adminreports, 0) AS adminreports FROM accounts a LEFT JOIN account_details d ON d.account_id = a.id WHERE a.admin > 0 OR a.supporter > 0 OR a.vct > 0 OR a.scripter > 0 OR a.mapper > 0 OR a.fmt > 0 GROUP BY a.id ORDER BY a.admin DESC, a.supporter DESC, a.vct DESC, a.scripter DESC, a.mapper DESC")
 end
-addEvent("staff:getTeamsData", true)
-addEventHandler("staff:getTeamsData", root, getTeamsData)
+secure("staff:getTeamsData", getTeamsData, "none", 2000)
 
-function getChangelogs()
+function getChangelogs(thePlayer)
+	if not canManageStaff(thePlayer) then
+		exports.global:logSecurityViolation(thePlayer, "staff:getChangelogs", "PERMISSION_DENIED")
+		return false
+	end
 	local changelogs = {}
 	local mQuery1 = nil
 	mQuery1 = mysql:query("SELECT (CASE WHEN to_rank>from_rank THEN 1 ELSE 0 END) AS promoted, s.id, s.userid, team, from_rank, to_rank, s.`by` AS `by`, details, DATE_FORMAT(date,'%b %d, %Y %h:%i %p') AS date FROM staff_changelogs s ORDER BY id DESC")
@@ -108,31 +137,71 @@ function getChangelogs()
 		table.insert(changelogs, row )
 	end
 	mysql:free_result(mQuery1)
-	triggerClientEvent(source, "openStaffManager", source, nil, nil, changelogs )
+	triggerClientEvent(thePlayer, "openStaffManager", thePlayer, nil, nil, changelogs )
 end
-addEvent("staff:getChangelogs", true)
-addEventHandler("staff:getChangelogs", root, getChangelogs)
+secure("staff:getChangelogs", getChangelogs, "none", 2000)
 
-function editStaff(userid, ranks, details)
-	local thePlayer = client and client or source
-	if not userid or not tonumber(userid) then
+-- الحد الأقصى لكل فريق (index = team) - أي رقم برّه ده مرفوض
+local MAX_RANK = { [1] = 5, [2] = 2, [3] = 2, [4] = 3, [5] = 2, [6] = 2 }
+
+function editStaff(thePlayer, userid, ranks, details)
+	-- [SECURITY] الفحص القديم كان: `if not A or not B then deny`
+	-- ده منطقيًا معناه "لازم الاتنين مع بعض"، فكان بيمنع السينيور أدمن الشرعي.
+	-- الصح: أي واحد فيهم يكفي.
+	if not canManageStaff(thePlayer) then
+		outputChatBox("You are not authorized to change ranks!", thePlayer, 255, 0, 0)
+		exports.global:logSecurityViolation(thePlayer, "staff:editStaff", "PERMISSION_DENIED")
+		return false
+	end
+
+	userid = exports.global:secureInt(userid, 1)
+	if not userid then
 		outputChatBox("Internal Error!", thePlayer, 255, 0, 0)
 		return false
-	else
-		userid = tonumber(userid)
 	end
+
+	-- [SECURITY] ranks كانت بتتحط في الاستعلام مباشرة من غير أي تحقق -> SQL injection
+	-- + مكانش فيه حد أقصى للرتبة (رتبة 999 كانت ممكنة)
+	if type(ranks) ~= "table" then return false end
+	local cleanRanks = {}
+	for i = 1, 6 do
+		if ranks[i] ~= nil then
+			local r = exports.global:secureInt(ranks[i], 0, MAX_RANK[i])
+			if not r then
+				outputChatBox("Invalid rank value.", thePlayer, 255, 0, 0)
+				exports.global:logSecurityViolation(thePlayer, "staff:editStaff", "INVALID_RANK")
+				return false
+			end
+			cleanRanks[i] = r
+		end
+	end
+
+	-- [SECURITY] ممنوع حد يرفّع نفسه، أو يدّي رتبة أعلى من رتبته هو
+	local myAdmin = exports.integration:getAdminLevel(thePlayer)
+	if cleanRanks[1] and cleanRanks[1] >= myAdmin and not exports.integration:isPlayerHeadAdmin(thePlayer) then
+		outputChatBox("You cannot assign a rank equal to or above your own.", thePlayer, 255, 0, 0)
+		return false
+	end
+	if tonumber(getElementData(thePlayer, "account:id")) == userid and not exports.integration:isPlayerHeadAdmin(thePlayer) then
+		outputChatBox("You cannot edit your own staff rank.", thePlayer, 255, 0, 0)
+		exports.global:logSecurityViolation(thePlayer, "staff:editStaff", "SELF_PROMOTION_ATTEMPT")
+		return false
+	end
+
+	ranks = cleanRanks
+
+	if details ~= nil then
+		details = exports.global:secureString(details, 512) or ""
+	end
+
 	local target = false
-	for _, player in pairs(getElementsByType("player")) do
-		if getElementData(player, "account:id") == userid then
+	for _, player in ipairs(getElementsByType("player")) do
+		if tonumber(getElementData(player, "account:id")) == userid then
 			target = player
 			break
 		end
 	end
 	staffTitles = exports.integration:getStaffTitles()
-	if not exports.integration:isPlayerSeniorAdmin(thePlayer) or not exports.integration:isPlayerLeadScripter(thePlayer) then
-		outputChatBox("You are not authorized to change ranks!", thePlayer, 255, 0, 0)
-		return false
-	end
 	dbQuery(function(qh, userid, staffTitles, target, ranks, details, thePlayer)
 		local result = dbPoll(qh, 0)
 		if result then
@@ -200,13 +269,13 @@ function editStaff(userid, ranks, details)
 					return false
 				end
 			end
-			triggerEvent("staff:getStaffInfo", thePlayer, user.username, "Staff rank for "..user.username.." has been set!")
+			-- نداء مباشر بدل triggerEvent: الـ secure() بيرفض النداءات اللي مالهاش كلاينت
+			getStaffInfo(thePlayer, user.username, "Staff rank for "..user.username.." has been set!")
 		end
 	end, {userid, staffTitles, target, ranks, details, thePlayer}, exports.mysql:getConn(), "SELECT id, username, admin, supporter, vct, scripter, mapper, fmt FROM accounts WHERE id=?", userid)
 
 end
-addEvent("staff:editStaff", true)
-addEventHandler("staff:editStaff", root, editStaff)
+secure("staff:editStaff", editStaff, "none", 1000)
 
 function makePlayerStaff(thePlayer, commandName, who, rank) --/ MAXIME
 	if exports.integration:isPlayerSeniorAdmin(thePlayer) or exports.integration:isPlayerVehicleConsultant(thePlayer) or exports.integration:isPlayerLeadScripter(thePlayer) or exports.integration:isPlayerMappingTeamLeader(thePlayer) then
