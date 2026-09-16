@@ -1,6 +1,6 @@
 <meta>
 	<info author="OwlGaming MTA Scripting Team" type="script" description="Anticheat System"/>
-	
+
 	<script src="c_anticheat.lua" type="client"/>
 	<script src="s_anticheat.lua" type="server"/>
 
@@ -13,5 +13,7 @@
 
 	<export function="protectElementData" type="server"/>
 	<export function="allowElementData" type="server"/>
+	<export function="protectKeys" type="server"/>
+	<export function="isElementDataProtected" type="server"/>
 	<export function="fetchH" type="server"/>
 </meta>
